@@ -1,0 +1,16 @@
+parameters:
+    level: 5
+    paths:
+        - commands
+        - components
+        - domain
+        - messaging
+        - models
+        - modules
+        - repositories
+        - services
+    excludePaths:
+        - vendor
+        - runtime
+    ignoreErrors:
+        - '#Access to an undefined property app\\models\\#'

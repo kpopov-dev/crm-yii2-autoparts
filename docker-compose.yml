@@ -1,0 +1,125 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: crm-mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-crm}
+      MYSQL_USER: ${DB_USER:-crm}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-crm}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+    ports:
+      - "${DB_EXPOSED_PORT:-3307}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: crm-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-crm}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-crm}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_UI_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  php:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: crm-php
+    working_dir: /var/www/backend
+    volumes:
+      - ./backend:/var/www/backend
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: crm-nginx
+    ports:
+      - "${API_PORT:-8080}:80"
+    volumes:
+      - ./backend:/var/www/backend
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - php
+
+  worker-outbox:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: crm-worker-outbox
+    working_dir: /var/www/backend
+    command: php yii outbox/relay
+    restart: unless-stopped
+    volumes:
+      - ./backend:/var/www/backend
+    depends_on:
+      php:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  worker-notifications:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: crm-worker-notifications
+    working_dir: /var/www/backend
+    command: php yii consume/notifications
+    restart: unless-stopped
+    volumes:
+      - ./backend:/var/www/backend
+    depends_on:
+      php:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  worker-analytics:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: crm-worker-analytics
+    working_dir: /var/www/backend
+    command: php yii consume/analytics
+    restart: unless-stopped
+    volumes:
+      - ./backend:/var/www/backend
+    depends_on:
+      php:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  frontend:
+    image: node:20-alpine
+    container_name: crm-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_modules:/app/node_modules
+
+volumes:
+  mysql_data:
+  rabbitmq_data:
+  frontend_modules:
